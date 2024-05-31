@@ -5,7 +5,7 @@ from app.repositories.conversation import (
     find_conversation_by_user_id,
     update_feedback,
 )
-from app.repositories.models.conversation import FeedbackModel
+from app.repositories.models.conversation import FeedbackModel, MessageModel
 from app.routes.schemas.conversation import (
     ChatInput,
     ChatOutput,
@@ -24,16 +24,16 @@ from app.usecases.chat import (
     propose_conversation_title,
 )
 from app.user import User
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Query
+from typing import List, Optional
+from app import db
 
 router = APIRouter(tags=["conversation"])
-
 
 @router.get("/health")
 def health():
     """For health check"""
     return {"status": "ok"}
-
 
 @router.post("/conversation", response_model=ChatOutput)
 def post_message(request: Request, chat_input: ChatInput):
@@ -42,7 +42,6 @@ def post_message(request: Request, chat_input: ChatInput):
 
     output = chat(user_id=current_user.id, chat_input=chat_input)
     return output
-
 
 @router.post(
     "/conversation/related-documents",
@@ -59,7 +58,6 @@ def get_related_documents(
     output = fetch_related_documents(user_id=current_user.id, chat_input=chat_input)
     return output
 
-
 @router.get("/conversation/{conversation_id}", response_model=Conversation)
 def get_conversation(request: Request, conversation_id: str):
     """Get a conversation history"""
@@ -68,14 +66,12 @@ def get_conversation(request: Request, conversation_id: str):
     output = fetch_conversation(current_user.id, conversation_id)
     return output
 
-
 @router.delete("/conversation/{conversation_id}")
 def remove_conversation(request: Request, conversation_id: str):
     """Delete conversation"""
     current_user: User = request.state.current_user
 
     delete_conversation_by_id(current_user.id, conversation_id)
-
 
 @router.get("/conversations", response_model=list[ConversationMetaOutput])
 def get_all_conversations(
@@ -97,14 +93,12 @@ def get_all_conversations(
     ]
     return output
 
-
 @router.delete("/conversations")
 def remove_all_conversations(
     request: Request,
 ):
     """Delete all conversations"""
     delete_conversation_by_user_id(request.state.current_user.id)
-
 
 @router.patch("/conversation/{conversation_id}/title")
 def patch_conversation_title(
@@ -117,7 +111,6 @@ def patch_conversation_title(
         current_user.id, conversation_id, new_title_input.new_title
     )
 
-
 @router.get(
     "/conversation/{conversation_id}/proposed-title", response_model=ProposedTitle
 )
@@ -127,7 +120,6 @@ def get_proposed_title(request: Request, conversation_id: str):
 
     title = propose_conversation_title(current_user.id, conversation_id)
     return ProposedTitle(title=title)
-
 
 @router.put(
     "/conversation/{conversation_id}/{message_id}/feedback",
@@ -157,3 +149,23 @@ def put_feedback(
         category=feedback_input.category if feedback_input.category else "",
         comment=feedback_input.comment if feedback_input.comment else "",
     )
+
+# New endpoint for pagination
+@router.get("/conversation/{conversation_id}/messages", response_model=List[MessageModel])
+def get_messages(
+    request: Request,
+    conversation_id: str,
+    before_id: Optional[str] = Query(None, alias='before_id'),
+    limit: int = Query(20, alias='limit', description='Number of messages to return'),
+):
+    current_user: User = request.state.current_user
+
+    query = db.session.query(MessageModel).filter_by(conversation_id=conversation_id).order_by(MessageModel.id.desc())
+    
+    if before_id:
+        query = query.filter(MessageModel.id < before_id)
+    
+    messages = query.limit(limit).all()
+    messages_data = [message.to_dict() for message in messages]
+
+    return messages_data
