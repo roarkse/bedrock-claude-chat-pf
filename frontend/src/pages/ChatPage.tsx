@@ -1,17 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import InputChatContent from '../components/InputChatContent';
 import useChat from '../hooks/useChat';
 import ChatMessage from '../components/ChatMessage';
 import useScroll from '../hooks/useScroll';
 import { useNavigate, useParams } from 'react-router-dom';
-import {
-  PiArrowsCounterClockwise,
-  PiLink,
-  PiPencilLine,
-  PiStar,
-  PiStarFill,
-  PiWarningCircleFill,
-} from 'react-icons/pi';
+import { PiArrowsCounterClockwise, PiLink, PiPencilLine, PiStar, PiStarFill, PiWarningCircleFill } from 'react-icons/pi';
 import Button from '../components/Button';
 import { useTranslation } from 'react-i18next';
 import SwitchBedrockModel from '../components/SwitchBedrockModel';
@@ -19,7 +12,6 @@ import useBot from '../hooks/useBot';
 import useConversation from '../hooks/useConversation';
 import ButtonPopover from '../components/PopoverMenu';
 import PopoverItem from '../components/PopoverItem';
-
 import { copyBotUrl } from '../utils/BotUtils';
 import { produce } from 'immer';
 import ButtonIcon from '../components/ButtonIcon';
@@ -27,6 +19,7 @@ import StatusSyncBot from '../components/StatusSyncBot';
 import Alert from '../components/Alert';
 import useBotSummary from '../hooks/useBotSummary';
 import useModel from '../hooks/useModel';
+import { io } from 'socket.io-client';
 
 const MISTRAL_ENABLED: boolean = import.meta.env.VITE_APP_ENABLE_MISTRAL === 'true';
 
@@ -49,11 +42,11 @@ const ChatPage: React.FC = () => {
   } = useChat();
 
   const { getBotId } = useConversation();
-
   const { scrollToBottom, scrollToTop } = useScroll();
-
-  const { conversationId: paramConversationId, botId: paramBotId } =
-    useParams();
+  const { conversationId: paramConversationId, botId: paramBotId } = useParams();
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [beforeId, setBeforeId] = useState<string | null>(null);
+  const socket = io('http://localhost:5000'); // Adjust the URL as needed
 
   const botId = useMemo(() => {
     return paramBotId ?? getBotId(conversationId);
@@ -154,7 +147,7 @@ const ChatPage: React.FC = () => {
     });
   }, [inputBotParams, regenerate]);
 
-  useEffect(() => {
+    useEffect(() => {
     if (messages.length > 0) {
       scrollToBottom();
     } else {
@@ -195,40 +188,33 @@ const ChatPage: React.FC = () => {
     }
   }, [bot, mutateBot, updateMyBotStarred, updateSharedBotStarred]);
 
-  const [copyLabel, setCopyLabel] = useState(t('bot.titleSubmenu.copyLink'));
-  const onClickCopyUrl = useCallback(
-    (botId: string) => {
-      copyBotUrl(botId);
-      setCopyLabel(t('bot.titleSubmenu.copiedLink'));
-      setTimeout(() => {
-        setCopyLabel(t('bot.titleSubmenu.copyLink'));
-      }, 3000);
-    },
-    [t]
-  );
+  const fetchMessages = async () => {
+    const response = await fetch(`/conversation/${conversationId}/messages?before_id=${beforeId}&limit=20`);
+    const data = await response.json();
+    setMessages(prevMessages => [...data, ...prevMessages]);
+    if (data.length > 0) {
+      setBeforeId(data[data.length - 1].id);
+    }
+  };
 
-  const onClickSyncError = useCallback(() => {
-    navigate(`/bot/edit/${bot?.id}`);
-  }, [bot?.id, navigate]);
-
-  const { disabledImageUpload } = useModel();
-  const [dndMode, setDndMode] = useState(false);
-  const onDragOver: React.DragEventHandler<HTMLDivElement> = useCallback(
-    (e) => {
-      if (!disabledImageUpload) {
-        setDndMode(true);
+  useEffect(() => {
+    const chatContainer = chatContainerRef.current;
+    const handleScroll = async () => {
+      if (chatContainer.scrollTop === 0) {
+        await fetchMessages();
       }
-      e.preventDefault();
-    },
-    [disabledImageUpload]
-  );
+    };
 
-  const endDnd: React.DragEventHandler<HTMLDivElement> = useCallback((e) => {
-    setDndMode(false);
-    e.preventDefault();
-  }, []);
+    chatContainer.addEventListener('scroll', handleScroll);
+    return () => chatContainer.removeEventListener('scroll', handleScroll);
+  }, [beforeId]);
 
-  return (
+  const stopGenerating = () => {
+    const userId = 'current_user_id';  // Replace with actual user ID
+    socket.emit('stop_generation', { user_id: userId });
+  };
+
+    return (
     <div onDragOver={onDragOver} onDrop={endDnd} onDragEnd={endDnd}>
       <div className="relative h-14 w-full">
         <div className="flex w-full justify-between">
@@ -291,7 +277,7 @@ const ChatPage: React.FC = () => {
         )}
       </div>
       <hr className="w-full border-t border-gray" />
-      <div className="pb-52 lg:pb-40">
+      <div id="chatContainer" ref={chatContainerRef} style={{ overflowY: 'scroll', height: '500px' }}>
         {messages.length === 0 ? (
           <div className="relative flex w-full justify-center">
             {!loadingConversation && (
@@ -325,7 +311,7 @@ const ChatPage: React.FC = () => {
             </div>
 
             <Button
-              className="mt-2 shadow "
+              className="mt-2 shadow"
               icon={<PiArrowsCounterClockwise />}
               outlined
               onClick={() => {
@@ -361,9 +347,11 @@ const ChatPage: React.FC = () => {
           onSend={onSend}
           onRegenerate={onRegenerate}
         />
+        <button id="stopButton" onClick={stopGenerating}>Stop Generating</button>
       </div>
     </div>
   );
 };
 
 export default ChatPage;
+
